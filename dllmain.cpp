@@ -1,63 +1,14 @@
-/*
-    SOURCES:
-        - https://guidedhacking.com/threads/veh-hooking-hooking-via-forced-exception.11928/
-        - https://github.com/hoangprod/LeoSpecial-VEH-Hook/blob/master/Main.cpp
-        - https://docs.microsoft.com/en-us/windows/win32/api/winnt/nc-winnt-pvectored_exception_handler
-    PROJECT SETTINGS:
-
-    INFO:
-        - USAGE:
-            This code creates a DLL. When the DLL is injected in an application it will install an VEH hook on the
-            MessageBoxW function to change the text in the textbox.
-
-        - Different ways to create SEH/VEH hooks
-            There are several ways to trigger an exception that will be caught by our Exception handler:
-                - STATUS_GUARD_PAGE_VIOLATION
-                - STATUS_ACCESS_VIOLATION (with NO_ACCESS flag)
-                - EXCEPTION BREAKPOINT (INT3 opcode)
-                - setting Dr registers in PCONTEXT
-
-            When we return to the place of the exception after executing our hook, we have to make sure the exception is not triggered again.
-            There are 2 ways to accomplish this:
-                - SINGLE STEP EXCEPTION
-                - creating a trampoline with assembly
-
-            There are also different ways to install an exception handler
-                - by using SetUnhandledExceptionFilter/SetVectoredExceptionHandler
-                - by changing pointers in Thead Information Block (TIB) with assembly 
-
-            In this program we will use the STATUS_GUARD_PAGE_VIOLATION in combination with the SINGLE STEP EXCEPTION to trigger and recover from the exception,
-            and we will use SetVectoredExceptionHandler to install the handler
-
-        - VEH:
-            In Windows, users are allowed to register their own vectored exception handler with the WINAPI AddVectoredExceptionHandler.
-            The PVECTORED_EXCEPTION_HANDLER structure contains _EXCEPTION_POINTERS that contains a PCONTEXT ContextRecord.
-            This will give us access to the debug registers, floating point registers, segments registers, general purpose registers as well as control registers. 
-            It also allows us to directly modify control registers such as EIP/RIP to achieve execution flow modification.
-
-        - STATUS_SINGLE_STEP: 
-            Thus is not a violation but instead a mechanism to detect a trace trap or when another single instruction mechanism signals that one instruction is executed. 
-            This can be achieve by settings the ContextRecord's EFlags with |= 0x100.
-            When we use VirtualProtect to set protection flags on a page, it is applied to the entire page. 
-            This means that other functions on that page will also trigger the exception. By setting the Eflags with the bitwise OR operator and 0x100,
-            we can step 1 instruction at a time through the page until we get to the exact address we want to hook, 
-            then we will perform our EIP/RIP modification and achieve the hook we need.
-            If the function we are on isn't the one we want to hook but is on the same page, 
-            STATUS_SINGLE_STEP will keep going until the function's return is called, which then we will no longer be in the page. This way we avoid hooking the wrong function.
-            
-        - SUMMARY VEH HOOK:
-            Find the address of the function you want to hook (GetProcAddress)
-            Register a vectored exception handle, changing the EIP/RIP to your own function (AddVectoredExceptionHandler)
-            Use VirtualProtect to add a PAGE_GUARD modifier to your target function's address page
-            When the target function is called, the PAGE_GUARD_VIOLATION exception will trigger, the VEH will catch the exception, and redirect the flow to your function.
-
-        - BUILDING
-            Because of the register names, this can only be compiled for x86
-*/
-
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <stdio.h>
+
+// Access the Instruction Pointer Register in 32 and 64 bit architectures
+#if _WIN64
+#define instr_ptr Rip
+#else
+#define instr_ptr Eip
+#endif
+
 
 typedef int(WINAPI* TrueMessageBox)(HWND, LPCWSTR, LPCWSTR, UINT);
 
@@ -116,7 +67,10 @@ LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
         printf("Breakpoint hit!\n");
 
         printf("Setting ContextRecord to hook\n");
-        ExceptionInfo->ContextRecord->Eip = (UINT_PTR)hookedMessageBox; //Modify EIP/RIP to where we want to jump to instead of the original function
+
+        // Modify EIP/RIP (Instruction pointer register) to 
+        // execute the hook after the exception handling is complete
+        ExceptionInfo->ContextRecord->instr_ptr = (UINT_PTR)hookedMessageBox;
 
         return EXCEPTION_CONTINUE_EXECUTION; //Continue to next instruction
     }
