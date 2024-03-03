@@ -102,27 +102,6 @@ bool AreInSamePage(const PDWORD Addr1, const PDWORD Addr2)
     return false;
 }
 
-// print parameters to console 
-void print_parameters(PCONTEXT debug_context) {
-    printf("EAX: %X EBX: %X ECX: %X EDX: %X\n",
-        debug_context->Eax, debug_context->Ebx, debug_context->Ecx, debug_context->Edx);
-    printf("ESP: %X EBP: %X\n",
-        debug_context->Esp, debug_context->Ebp);
-    printf("ESI: %X EDI: %X\n",
-        debug_context->Esi, debug_context->Edi);
-
-    printf("Parameters\n"
-        "HWND: %p\n"
-        "lptext: %s\n"
-        "lpcaption: %s\n"
-        "type: %X\n",
-        (HWND)(*(PDWORD)(debug_context->Esp + 0x4)), //ESP is stack pointer, all parameters are on the stack
-        (char*)(*(PDWORD)(debug_context->Esp + 0x8)),
-        (char*)(*(PDWORD)(debug_context->Esp + 0xC)), //prints first char of the parameter (Why only first character?)
-        (UINT)(*(PDWORD)(debug_context->Esp + 0x10))); //prints 23h == MB_ICONQUESTION + MB_YESNOCANCEL
-
-}
-
 // When an exception is raised, ExceptionFilter checks to see whether the exception occurred at the desired address.
 // If so, the exception is handled and now the context record 
 // (containing, among other things, the values of all registers and flags when the breakpoint was hit).
@@ -135,10 +114,9 @@ LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
     if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION && (DWORD)ExceptionInfo->ExceptionRecord->ExceptionAddress == (DWORD)trueMessageBox)
     {
         printf("Breakpoint hit!\n");
-        print_parameters(ExceptionInfo->ContextRecord);
 
         printf("Setting ContextRecord to hook\n");
-        ExceptionInfo->ContextRecord->Eip = (DWORD)hookedMessageBox; //Modify EIP/RIP to where we want to jump to instead of the original function
+        ExceptionInfo->ContextRecord->Eip = (UINT_PTR)hookedMessageBox; //Modify EIP/RIP to where we want to jump to instead of the original function
 
         return EXCEPTION_CONTINUE_EXECUTION; //Continue to next instruction
     }
