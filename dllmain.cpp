@@ -30,9 +30,6 @@ int WINAPI hookedMessageBox(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT u
 	return retval;
 }
 
-PVOID VEH_Handle = nullptr;
-DWORD oldProtection = 0;
-
 // This function checks if two functions in the same page. 
 // We cannot hook 2 functions on the same page because this will cause an infinite callback.
 // maakt het nu eigenlijk uit of ze in dezelfde pagina liggen
@@ -102,41 +99,12 @@ LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
 
 }
 
-DWORD WINAPI installVEHHook(PVOID base) {
+// When using the Vectored Exception Handler, this is used to remove the VEH
+// (unused when using SEH instead) 
+PVOID VEH_Handle = nullptr;
 
-	// check if both are not in same page
-	if (AreInSamePage((PDWORD)trueMessageBox, (PDWORD)hookedMessageBox))
-		return FALSE;
-
-	// Register the ExceptionFilter with SEH or VEH
-	//SetUnhandledExceptionFilter(ExceptionFilter);
-	VEH_Handle = AddVectoredExceptionHandler(1, ExceptionFilter);
-
-	//Toggle PAGE_GUARD flag on the page
-	if (VEH_Handle && VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &oldProtection)) {
-		//As test: call function
-		//fprintf(console.stream, "Executing Test MessageBox.\n");
-		//MessageBoxW(NULL, L"Finished", L"MyMessageBox", MB_OK);
-		fprintf(console.stream, "installed page guard\n");
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-DWORD WINAPI uninstallVEHHook(PVOID base) {
-	DWORD old;
-	if (VEH_Handle && //Make sure we have a valid Handle to the registered VEH
-		VirtualProtect((LPVOID)trueMessageBox, 1, oldProtection, &old) && //Restore old Flags
-		RemoveVectoredExceptionHandler(VEH_Handle))
-		return true;
-
-	// Remove the ExceptionFilter with SEH or VEH
-	//SetUnhandledExceptionFilter(NULL);
-
-	return false;
-}
-
+// Store the old page protection before adding the Page guard
+DWORD oldProtection = 0;
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
@@ -155,15 +123,39 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 			return FALSE;
 		}
 
-		// install SEH hook
-		CreateThread(nullptr, NULL, installVEHHook, hModule, NULL, nullptr);
+		// We can't make this hook if both the hook and the true function are in the same page?
+		// TODO: draw the interactions to check if this is true
+		if (AreInSamePage((PDWORD)trueMessageBox, (PDWORD)hookedMessageBox))
+			return FALSE;
+
+		// Register the ExceptionFilter with SEH or VEH
+		//SetUnhandledExceptionFilter(ExceptionFilter);
+		VEH_Handle = AddVectoredExceptionHandler(1, ExceptionFilter);
+
+		// Add a page guard to the page that contains the MessageBoxW function
+		VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &oldProtection);
+
+		// Test
+		fprintf(console.stream, "Testing the hook ...\n");
+		MessageBoxW(NULL, L"Testing the hook", L"Testing", MB_OK);
 
 		return TRUE;
 	}
 	case DLL_THREAD_ATTACH: break;
 	case DLL_THREAD_DETACH: break;
 	case DLL_PROCESS_DETACH: {
-		// Uninstall the hook
+		fprintf(console.stream, "Uninstalling the hook ...\n");
+
+		// Restore the old protection
+		VirtualProtect((LPVOID)trueMessageBox, 1, oldProtection, &oldProtection);
+
+		// Remove the ExceptionFilter with SEH or VEH
+		//(void)SetUnhandledExceptionFilter(NULL);
+		RemoveVectoredExceptionHandler(VEH_Handle);
+
+		// Open a MessageBox to allow reading the output
+		MessageBoxW(NULL, L"Press Ok to close", L"Closing", NULL);
+
 		return TRUE;
 	}
 	}
