@@ -59,7 +59,7 @@ bool AreInSamePage(const PDWORD Addr1, const PDWORD Addr2)
 LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
 
 	//We will catch PAGE_GUARD Violation and check the address
-	if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION && (DWORD)ExceptionInfo->ExceptionRecord->ExceptionAddress == (DWORD)trueMessageBox)
+	if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION && (UINT_PTR)ExceptionInfo->ExceptionRecord->ExceptionAddress == (UINT_PTR)trueMessageBox)
 	{
 		fprintf(console.stream, "Breakpoint hit!\n");
 
@@ -129,6 +129,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 			return FALSE;
 
 		// Register the ExceptionFilter with SEH or VEH
+		// Note: SEH doesn't seem to trigger on a STATUS_GUARD_PAGE_VIOLATION but VEH does!
 		//SetUnhandledExceptionFilter(ExceptionFilter);
 		VEH_Handle = AddVectoredExceptionHandler(1, ExceptionFilter);
 
