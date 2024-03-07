@@ -18,11 +18,13 @@ TrueMessageBox trueMessageBox = MessageBoxW;
 int WINAPI hookedMessageBox(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType)
 {
 	fprintf(console.stream, "Executing hooked function\n");
-	//LPCTSTR lpTextChanged = L"This messagebox is also changed";
+
+	// Execute the true function from the hook with changed arguments
+	// => this call will not trigger an exception because we didn't reinstall the page guard yet
 	LPCTSTR lpCaptionChanged = L"Hooked MessageBox";
 	int retval = trueMessageBox(hWnd, lpText, lpCaptionChanged, uType);
 
-	//reapply page guard before return
+	// Reapply page guard before returning the result of the true function
 	fprintf(console.stream, "Reinstalling page guard from end of hook function\n");
 	DWORD dwOld;
 	VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &dwOld); //Reapply the PAGE_GUARD flag because everytime it is triggered, it get removes
@@ -30,51 +32,52 @@ int WINAPI hookedMessageBox(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT u
 	return retval;
 }
 
-// When an exception is raised, ExceptionFilter checks to see whether the exception occurred at the desired address.
-// If so, the exception is handled and now the context record 
-// (containing, among other things, the values of all registers and flags when the breakpoint was hit).
-// Since the function sets up a standard BP - based frame, the parameters can all be retrieved through 
-// ESP(since the stack frame was not set up yet when the breakpoint was hit). 
-// All registers and parameters can then be inspected and/or modified as shown in print_parameters and modify_text.
+// When an exception is raised, the ExceptionFilter will be executed
 LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
 
-	//We will catch PAGE_GUARD Violation and check the address
+	// If the exception is a PAGE_GUARD Violation and the address is the address of the hooked function,
+	// => deviate the program execution to our hook function
 	if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION && (UINT_PTR)ExceptionInfo->ExceptionRecord->ExceptionAddress == (UINT_PTR)trueMessageBox)
 	{
 		fprintf(console.stream, "Breakpoint hit!\n");
-
-		fprintf(console.stream, "Setting ContextRecord to hook\n");
 
 		// Modify EIP/RIP (Instruction pointer register) to 
 		// execute the hook after the exception handling is complete
 		ExceptionInfo->ContextRecord->instr_ptr = (UINT_PTR)hookedMessageBox;
 
-		return EXCEPTION_CONTINUE_EXECUTION; //Continue to next instruction
+		// Allow the program to continue execution at the address in the Instruction pointer register
+		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 
-	//to avoid hook getting deleted from access on same page: set context flags
+	// If the exception is a PAGE_GUARD Violation but the address is not correct:
+	// - if we let the program continue, the PAGE_GUARD will be gone, 
+	//   and the ExceptionFilter will not be called again when the function is called
+	// => we need some way to reinstall the PAGE_GUARD after this other function is completed
 	else if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION) {
-		//Will trigger an STATUS_SINGLE_STEP exception right after the next instruction get executed. In short, we come right back into this exception handler 1 instruction later
 		fprintf(console.stream, "Hit same page!\n");
+
+		// This will trigger a STATUS_SINGLE_STEP exception right after the next instruction gets executed
+		// => the ExceptionFilter will be called again so we can reinstall the page guard
 		ExceptionInfo->ContextRecord->EFlags |= 0x100;
 
-		return EXCEPTION_CONTINUE_EXECUTION; //Continue to next instruction
+		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 
-	// catch exception to reinstall page guard
-	else if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP) { //We will also catch STATUS_SINGLE_STEP, meaning we just had a PAGE_GUARD violation
-
-		//Reapply the PAGE_GUARD flag because everytime it is triggered, it get removes (only if we don't call true function in hooked function)
-		DWORD dwOld;
+	// catch the STATUS_SINGLE_STEP exception (that we caused) to reinstall page guard
+	else if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP) {
 		fprintf(console.stream, "Caught single step, reinstalling page guard\n");
+
+		// Reapply the PAGE_GUARD flag
+		DWORD dwOld;
 		VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &dwOld);
 
-		return EXCEPTION_CONTINUE_EXECUTION; //Continue to next instruction
+		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 
-	// Exception is not caused by our hook
+	// Any other exception is not caused by our hook
+	// Keep going down the exception handling list to find a correct handler
 	else {
-		return EXCEPTION_CONTINUE_SEARCH; //Keep going down the exception handling list to find the right handler IF it is not PAGE_GUARD nor SINGLE_STEP
+		return EXCEPTION_CONTINUE_SEARCH;
 	}
 
 }
@@ -84,6 +87,7 @@ LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo) {
 PVOID VEH_Handle = nullptr;
 
 // Store the old page protection before adding the Page guard
+// so we can restore it when unhooking
 DWORD oldProtection = 0;
 
 // Note: When installing this directly from the DllMain function (without CreateThread),
