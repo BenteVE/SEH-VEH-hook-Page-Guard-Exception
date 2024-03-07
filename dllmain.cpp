@@ -106,6 +106,29 @@ PVOID VEH_Handle = nullptr;
 // Store the old page protection before adding the Page guard
 DWORD oldProtection = 0;
 
+// Note: When installing this directly from the DllMain function (without CreateThread),
+// the SEH hook does not work, but the VEH hook does
+DWORD WINAPI installHook(PVOID base) {
+
+	// We can't make this hook if both the hook and the true function are in the same page?
+	// TODO: draw the interactions to check if this is true
+	if (AreInSamePage((PDWORD)trueMessageBox, (PDWORD)hookedMessageBox))
+		return FALSE;
+
+	// Register the ExceptionFilter with SEH or VEH
+	//SetUnhandledExceptionFilter(ExceptionFilter);
+	VEH_Handle = AddVectoredExceptionHandler(1, ExceptionFilter);
+
+	// Add a page guard to the page that contains the MessageBoxW function
+	VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &oldProtection);
+
+	// Test
+	fprintf(console.stream, "Testing the hook ...\n");
+	MessageBoxW(NULL, L"Testing the hook", L"Testing", MB_OK);
+
+	return TRUE;
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
 	switch (ul_reason_for_call)
@@ -123,35 +146,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 			return FALSE;
 		}
 
-		// We can't make this hook if both the hook and the true function are in the same page?
-		// TODO: draw the interactions to check if this is true
-		if (AreInSamePage((PDWORD)trueMessageBox, (PDWORD)hookedMessageBox))
-			return FALSE;
-
-		// Register the ExceptionFilter with SEH or VEH
-		// Note: SEH doesn't seem to trigger on a STATUS_GUARD_PAGE_VIOLATION but VEH does!
-		//SetUnhandledExceptionFilter(ExceptionFilter);
-		VEH_Handle = AddVectoredExceptionHandler(1, ExceptionFilter);
-
-		// Add a page guard to the page that contains the MessageBoxW function
-		VirtualProtect((LPVOID)trueMessageBox, 1, PAGE_EXECUTE_READ | PAGE_GUARD, &oldProtection);
-
-		// Test
-		fprintf(console.stream, "Testing the hook ...\n");
-		MessageBoxW(NULL, L"Testing the hook", L"Testing", MB_OK);
+		// install hook
+		CreateThread(nullptr, NULL, installHook, hModule, NULL, nullptr);
 
 		return TRUE;
 	}
 	case DLL_THREAD_ATTACH: break;
 	case DLL_THREAD_DETACH: break;
 	case DLL_PROCESS_DETACH: {
+		// Note: moving the uninstall to a function with CreateThread doens't work (Race condition?)
 		fprintf(console.stream, "Uninstalling the hook ...\n");
 
 		// Restore the old protection
 		VirtualProtect((LPVOID)trueMessageBox, 1, oldProtection, &oldProtection);
 
 		// Remove the ExceptionFilter with SEH or VEH
-		//(void)SetUnhandledExceptionFilter(NULL);
+		//SetUnhandledExceptionFilter(NULL);
 		RemoveVectoredExceptionHandler(VEH_Handle);
 
 		// Open a MessageBox to allow reading the output
