@@ -30,26 +30,6 @@ int WINAPI hookedMessageBox(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT u
 	return retval;
 }
 
-// This function checks if two functions in the same page. 
-// We cannot hook 2 functions on the same page because this will cause an infinite callback.
-// maakt het nu eigenlijk uit of ze in dezelfde pagina liggen
-bool AreInSamePage(const PDWORD Addr1, const PDWORD Addr2)
-{
-	MEMORY_BASIC_INFORMATION mbi1;
-	if (!VirtualQuery(Addr1, &mbi1, sizeof(mbi1))) //Get Page information for Addr1
-		return true;
-
-	MEMORY_BASIC_INFORMATION mbi2;
-	if (!VirtualQuery(Addr2, &mbi2, sizeof(mbi2))) //Get Page information for Addr2
-		return true;
-
-	if (mbi1.BaseAddress == mbi2.BaseAddress) //See if the two pages start at the same Base Address
-		return true; //Both addresses are in the same page, abort hooking!
-
-	fprintf(console.stream, "Not on same page!\n");
-	return false;
-}
-
 // When an exception is raised, ExceptionFilter checks to see whether the exception occurred at the desired address.
 // If so, the exception is handled and now the context record 
 // (containing, among other things, the values of all registers and flags when the breakpoint was hit).
@@ -109,11 +89,6 @@ DWORD oldProtection = 0;
 // Note: When installing this directly from the DllMain function (without CreateThread),
 // the SEH hook does not work, but the VEH hook does
 DWORD WINAPI installHook(PVOID base) {
-
-	// We can't make this hook if both the hook and the true function are in the same page?
-	// TODO: draw the interactions to check if this is true
-	if (AreInSamePage((PDWORD)trueMessageBox, (PDWORD)hookedMessageBox))
-		return FALSE;
 
 	// Register the ExceptionFilter with SEH or VEH
 	//SetUnhandledExceptionFilter(ExceptionFilter);
